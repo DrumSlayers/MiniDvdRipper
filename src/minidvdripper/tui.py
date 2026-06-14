@@ -171,16 +171,33 @@ class DescribeScreen(ModalScreen):
                     out.append((d.name, str(d)))
         return out
 
+    def _status_glyphs(self) -> tuple[str, str, str]:
+        nerd = self.cfg.nerd_icons
+        return (icons.step_icon("idle", nerd)[0],   # none described
+                icons.step_icon("run", nerd)[0],    # some described
+                icons.step_icon("done", nerd)[0])   # all described
+
+    def _folder_options(self) -> list[tuple[str, str]]:
+        g_none, g_some, g_all = self._status_glyphs()
+        opts = []
+        for name, path in self._folders():
+            filled, total = describe_mod.folder_status(path)
+            g = g_all if (total and filled == total) else (g_some if filled else g_none)
+            opts.append((f"{g}  {name}", path))
+        return opts
+
     def compose(self) -> ComposeResult:
-        folders = self._folders()
+        opts = self._folder_options()
+        g_none, g_some, g_all = self._status_glyphs()
         with Vertical(id="dbox"):
-            yield Label("[b]Describe clips[/b]  ·  pick a folder, type a description, "
-                        "press ▶ to watch a clip, then Save or Apply")
+            yield Label(f"[b]Describe clips[/b]  ·  describe each clip, ▶ to watch, "
+                        f"then Save/Apply    ·    [grey62]{g_none}[/grey62] none   "
+                        f"[yellow]{g_some}[/yellow] some   [green]{g_all}[/green] all")
             with Horizontal(id="dhead"):
                 yield Label("Folder: ")
-                if folders:
-                    yield Select(folders, id="folder_sel", allow_blank=False,
-                                 value=folders[0][1])
+                if opts:
+                    yield Select(opts, id="folder_sel", allow_blank=False,
+                                 value=opts[0][1])
                 else:
                     yield Label("[dark_orange]No ripped folders under the parent "
                                 "folder.[/dark_orange]")
@@ -200,6 +217,17 @@ class DescribeScreen(ModalScreen):
     def _kick(self, folder: str) -> None:
         """Start a (re)load — safe to call from the UI thread."""
         self.run_worker(self._reload(folder), exclusive=True)
+
+    def _refresh_folders(self) -> None:
+        """Recompute the folder dropdown's status glyphs (after Save/Apply)."""
+        try:
+            sel = self.query_one("#folder_sel", Select)
+        except Exception:                           # noqa: BLE001
+            return
+        opts = self._folder_options()
+        sel.set_options(opts)
+        if any(v == self._folder for _, v in opts):
+            sel.value = self._folder
 
     def _status(self, msg: str, level: str = "info") -> None:
         color = _LOGCOLOR.get(level, "white")
@@ -268,10 +296,12 @@ class DescribeScreen(ModalScreen):
         self.app.call_from_thread(self._status, f"Applied — {n} clip(s) renamed + "
                                   "tagged. Montage refreshed.", "ok")
         self.app.call_from_thread(self._kick, self._folder)
+        self.app.call_from_thread(self._refresh_folders)
 
     def on_select_changed(self, e: Select.Changed) -> None:
-        if e.value and e.value != Select.BLANK:
-            self._kick(str(e.value))
+        v = str(e.value) if (e.value and e.value != Select.BLANK) else ""
+        if v and v != self._folder:
+            self._kick(v)
 
     def on_button_pressed(self, e: Button.Pressed) -> None:
         bid = e.button.id or ""
@@ -279,6 +309,7 @@ class DescribeScreen(ModalScreen):
             self.dismiss()
         elif bid == "save_desc":
             self._collect()
+            self._refresh_folders()
             self._status("Saved descriptions.tsv.", "ok")
         elif bid == "apply_desc":
             self._collect()
@@ -297,6 +328,15 @@ _LOGCOLOR = {"warn": "dark_orange", "fail": "red", "ok": "green",
 # Highlight key=value tokens (media=DVD-ROM, finalized=yes, eject=True…) so the
 # headers read as neat labels rather than a run-on line.
 _KV = re.compile(r"\b([A-Za-z_][\w-]*)=([^\s,;)]+)")
+
+
+def _hms(sec: float) -> str:
+    """Compact clip length: m:ss, or h:mm:ss past an hour. '?' if unknown."""
+    s = int(sec or 0)
+    if s <= 0:
+        return "?"
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
 class MiniDvdApp(App):
@@ -364,7 +404,7 @@ class MiniDvdApp(App):
         self.title = "MiniDvdRipper"
         self.sub_title = "Sony Handycam MiniDVD archiver"
         tbl = self.query_one("#sessions", DataTable)
-        tbl.add_columns("#", "Date", "Parts", "Size (MB)", "Output")
+        tbl.add_columns("#", "Date", "Length", "Parts", "Size (MB)", "Output")
         self._check_tools()
         self._detect_worker()      # auto-find the drive + report disc on startup
 
@@ -448,8 +488,8 @@ class MiniDvdApp(App):
         tbl = self.query_one("#sessions", DataTable)
         tbl.clear()
         for t in titles:
-            tbl.add_row(f"{t.number:02d}", t.date_tag, str(len(t.parts)),
-                        f"{t.size_bytes/1e6:.0f}", t.out_name())
+            tbl.add_row(f"{t.number:02d}", t.date_tag, _hms(t.duration),
+                        str(len(t.parts)), f"{t.size_bytes/1e6:.0f}", t.out_name())
 
     def _set_rot(self, text: str, warn: bool) -> None:
         c = "dark_orange" if warn else "green"

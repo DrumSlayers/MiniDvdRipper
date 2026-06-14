@@ -168,6 +168,18 @@ def scaffold_folder(folder: str) -> str | None:
     return tsv
 
 
+def folder_status(folder: str) -> tuple[int, int]:
+    """(clips with a non-empty description, total clips) for a disc folder.
+    (0, 0) when there are no clips."""
+    clips = _clips(os.path.join(folder, "video"))
+    if not clips:
+        return (0, 0)
+    rows = _read_tsv(os.path.join(folder, TSV))
+    filled = sum(1 for c in clips
+                 if (rows.get(_session(c) or "", {}).get("description") or "").strip())
+    return (filled, len(clips))
+
+
 def apply_folder(folder: str, parent: str | None = None) -> list[tuple[str, str]]:
     """Apply descriptions.tsv: embed metadata, rename clips (+ their contact
     sheets), rebuild the folder montage. Returns [(old_name, new_name), …]."""

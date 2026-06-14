@@ -317,6 +317,22 @@ def test_describe():
     rows = describe._read_tsv(p)
     check("tsv roundtrip", rows["01"]["description"] == "Fête à Mamie")
 
+    # folder_status: none / some / all
+    d = tempfile.mkdtemp()
+    v = os.path.join(d, "video")
+    os.makedirs(v)
+    for n in ("01__x.mkv", "02__x.mkv"):
+        open(os.path.join(v, n), "w").close()
+    check("status none", describe.folder_status(d) == (0, 2))
+    describe._write_tsv(os.path.join(d, "descriptions.tsv"), [
+        {"session": "01", "date": "", "duration": "", "description": "hi"},
+        {"session": "02", "date": "", "duration": "", "description": ""}])
+    check("status some", describe.folder_status(d) == (1, 2))
+    describe._write_tsv(os.path.join(d, "descriptions.tsv"), [
+        {"session": "01", "date": "", "duration": "", "description": "hi"},
+        {"session": "02", "date": "", "duration": "", "description": "yo"}])
+    check("status all", describe.folder_status(d) == (2, 2))
+
 
 if __name__ == "__main__":
     test_describe()

@@ -320,6 +320,9 @@ class Pipeline:
 
         # 5. Remux -----------------------------------------------------
         self.ev.step("Remux", "run")
+        for t in ttls:                       # fill duration so the table can show it
+            if t.duration <= 0:
+                t.duration = sum(remux.probe_duration(p) for p in t.parts)
         self.ev.titles_found(ttls)
         if not ttls:
             self._log("No VIDEO_TS titles, VR_MOVIE.VRO, or carvable tracks found.", "warn")
