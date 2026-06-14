@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minidvdripper"
+version = "1.0.0"
+description = "Lossless, bit-rot-aware archival ripper for Sony Handycam MiniDVDs — recovers even unfinalized discs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Pierre Sarret", email = "pierre.sarret@moji.fr" }]
+keywords = [
+    "dvd", "minidvd", "handycam", "sony", "ripper", "ddrescue", "archival",
+    "mpeg2", "mkv", "vob", "video-recovery", "unfinalized-dvd", "lossless",
+    "video-ts", "synology",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "Topic :: System :: Archiving :: Backup",
+]
+dependencies = ["textual>=0.60"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.5", "build>=1.0", "pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/drumslayer/MiniDvdRipper"
+Repository = "https://github.com/drumslayer/MiniDvdRipper"
+Issues = "https://github.com/drumslayer/MiniDvdRipper/issues"
+
+[project.scripts]
+mdvdrip = "minidvdripper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E741",   # ambiguous var name (l for line is fine here)
+    "B008",   # function call in default arg (we use it deliberately in Events)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["*_test.py"]
