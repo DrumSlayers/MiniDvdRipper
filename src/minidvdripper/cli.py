@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -36,6 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan", action="store_true",
                    help="triage mode: report each disc (blank / has-data-unfinalized / "
                         "ready) and eject, without ripping. Loops for a stack of discs.")
+    p.add_argument("--describe-init", action="store_true",
+                   help="write a descriptions.tsv template into each disc folder "
+                        "(clip, date, duration, blank description) to fill in")
+    p.add_argument("--describe-apply", action="store_true",
+                   help="apply descriptions.tsv: embed title/description/date and "
+                        "rename clips. Re-runnable (e.g. after a re-encode).")
+    p.add_argument("--folder", metavar="DIR",
+                   help="target one disc folder for --describe-* (default: all under --parent)")
     p.add_argument("--check", action="store_true", help="print tool preflight and exit")
     p.add_argument("--version", action="version", version=f"minidvdripper {__version__}")
     return p
@@ -178,18 +187,53 @@ def run_finalize(cfg: Config) -> int:
     return 0
 
 
+def run_describe(cfg: Config, one_folder: str | None, apply: bool) -> int:
+    """Scaffold or apply per-folder descriptions.tsv (clip naming + metadata)."""
+    from . import describe
+    if one_folder:
+        folders = [Path(one_folder).expanduser().resolve()]
+        parent = folders[0].parent
+    else:
+        if not cfg.parent_dir:
+            print("error: pass --parent DIR or --folder DIR.", file=sys.stderr)
+            return 2
+        parent = Path(cfg.parent_dir)
+        folders = [d for d in sorted(parent.iterdir())
+                   if d.is_dir() and (d / "video").is_dir()]
+    if not folders:
+        print("no disc folders found.")
+        return 0
+    for d in folders:
+        if apply:
+            renames = describe.apply_folder(str(d), str(parent))
+            print(f"\033[32m{d.name}\033[0m — applied, {len(renames)} renamed")
+            for old, new in renames:
+                print(f"    {old}  ->  {new}")
+        else:
+            tsv = describe.scaffold_folder(str(d))
+            print(f"\033[32m{d.name}\033[0m — "
+                  + (f"wrote {os.path.basename(tsv)}" if tsv else "no clips, skipped"))
+    if not apply:
+        tail = "" if one_folder else " --parent <DIR>"
+        print("\nFill the 'description' column (and fix dates) in each "
+              f"descriptions.tsv, then:\n  mdvdrip --describe-apply{tail}")
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.check:
         print(tools.preflight().summary())
         return 0
     cfg = cfg_from_args(args)
+    if args.parent:                 # remember last parent folder
+        cfg.save()
+    if args.describe_init or args.describe_apply:
+        return run_describe(cfg, args.folder, apply=args.describe_apply)
     if args.finalize:
         return run_finalize(cfg)
     if args.scan:
         return run_scan(cfg)
-    if args.parent:                 # remember last parent folder
-        cfg.save()
     if args.cli or args.from_iso:
         return run_headless(cfg, from_iso=args.from_iso, loop=args.loop)
     # default: TUI

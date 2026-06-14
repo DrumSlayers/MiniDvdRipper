@@ -9,7 +9,17 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from minidvdripper import carve, contact, disc, icons, imaging, isofs, notify, stills  # noqa: E402
+from minidvdripper import (  # noqa: E402
+    carve,
+    contact,
+    describe,
+    disc,
+    icons,
+    imaging,
+    isofs,
+    notify,
+    stills,
+)
 
 PASS = 0
 FAIL = 0
@@ -290,7 +300,26 @@ def test_carve_pack():
     os.unlink(path)
 
 
+# ---- 11. describe: slug / duration / name parsing / TSV ------------------
+def test_describe():
+    check("slug accents+spaces",
+          describe._slug("Anniversaire Mamie 70 ans") == "Anniversaire-Mamie-70-ans")
+    check("slug drops punctuation", describe._slug("Foot: PSG vs OM!") == "Foot-PSG-vs-OM")
+    check("dur minutes", describe._dur_tag(750) == "12m30s")
+    check("dur hours", describe._dur_tag(3725) == "1h02m05s")
+    check("session prefix", describe._session("01__2005-08-21_17h30.mkv") == "01")
+    check("date in name", describe._date_in_name("01__2005-08-21_17h30.mkv") == "2005-08-21")
+    check("time in name", describe._time_in_name("01__2005-08-21_17h30.mkv") == (17, 30))
+    check("no time -> None", describe._time_in_name("01__2005-08-21__fete__1m.mkv") is None)
+    p = os.path.join(tempfile.mkdtemp(), "descriptions.tsv")
+    describe._write_tsv(p, [{"session": "01", "date": "2005-08-21",
+                             "duration": "12m30s", "description": "Fête à Mamie"}])
+    rows = describe._read_tsv(p)
+    check("tsv roundtrip", rows["01"]["description"] == "Fête à Mamie")
+
+
 if __name__ == "__main__":
+    test_describe()
     test_carve_pack()
     test_label_dt()
     test_mediainfo()

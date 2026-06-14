@@ -6,6 +6,8 @@ loudly because that's the whole point of the tool.
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -13,7 +15,7 @@ from pathlib import Path
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -25,9 +27,11 @@ from textual.widgets import (
     Label,
     ProgressBar,
     RichLog,
+    Select,
     Static,
 )
 
+from . import describe as describe_mod
 from . import disc as disc_mod
 from . import finalize as fin
 from . import icons, notify, power, tools
@@ -130,6 +134,164 @@ class SettingsModal(ModalScreen):
             pass
         self.dismiss(changes)
 
+class DescribeScreen(ModalScreen):
+    """Edit per-clip descriptions/dates for an existing disc folder, then Save the
+    sidecar or Apply (embed metadata + rename) — no spreadsheet needed."""
+    CSS = """
+    DescribeScreen { align: center middle; }
+    #dbox { width: 92%; height: 90%; border: thick $accent; background: $surface;
+            padding: 1 2; }
+    #dhead { height: auto; margin-bottom: 1; }
+    #folder_sel { width: 1fr; }
+    #rows { height: 1fr; border: round $accent; padding: 0 1; }
+    .crow { height: auto; }
+    .crow .sess { width: 16; color: $text-muted; }
+    .crow .date { width: 14; }
+    .crow .desc { width: 1fr; }
+    .crow .openbtn { width: 5; }
+    #dstatus { height: 1; color: $text-muted; }
+    #dbtns { height: auto; align-horizontal: right; margin-top: 1; }
+    #dbtns Button { margin-left: 2; }
+    """
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, cfg: Config):
+        super().__init__()
+        self.cfg = cfg
+        self._folder = ""
+        self._rowsdata: dict = {}
+        self._clip: dict = {}
+
+    def _folders(self) -> list[tuple[str, str]]:
+        out = []
+        parent = Path(self.cfg.parent_dir) if self.cfg.parent_dir else None
+        if parent and parent.is_dir():
+            for d in sorted(parent.iterdir()):
+                if d.is_dir() and (d / "video").is_dir():
+                    out.append((d.name, str(d)))
+        return out
+
+    def compose(self) -> ComposeResult:
+        folders = self._folders()
+        with Vertical(id="dbox"):
+            yield Label("[b]Describe clips[/b]  ·  pick a folder, type a description, "
+                        "press ▶ to watch a clip, then Save or Apply")
+            with Horizontal(id="dhead"):
+                yield Label("Folder: ")
+                if folders:
+                    yield Select(folders, id="folder_sel", allow_blank=False,
+                                 value=folders[0][1])
+                else:
+                    yield Label("[dark_orange]No ripped folders under the parent "
+                                "folder.[/dark_orange]")
+            yield VerticalScroll(id="rows")
+            yield Label("", id="dstatus")
+            with Horizontal(id="dbtns"):
+                yield Button("Open folder", id="open_dir")
+                yield Button("Save", id="save_desc")
+                yield Button("Apply (rename + tag)", id="apply_desc", variant="success")
+                yield Button("Close", id="close_desc")
+
+    def on_mount(self) -> None:
+        folders = self._folders()
+        if folders:
+            self._kick(folders[0][1])
+
+    def _kick(self, folder: str) -> None:
+        """Start a (re)load — safe to call from the UI thread."""
+        self.run_worker(self._reload(folder), exclusive=True)
+
+    def _status(self, msg: str, level: str = "info") -> None:
+        color = _LOGCOLOR.get(level, "white")
+        self.query_one("#dstatus", Label).update(f"[{color}]{msg}[/{color}]")
+
+    def _make_row(self, sess: str, dur: str, date: str, desc: str):
+        return Horizontal(
+            Static(f"{sess} · {dur}", classes="sess"),
+            Input(value=date, classes="date", id=f"date_{sess}"),
+            Input(value=desc, placeholder="what is this clip? (e.g. Anniversaire Mamie)",
+                  classes="desc", id=f"desc_{sess}"),
+            Button("▶", id=f"open_{sess}", classes="openbtn"),
+            classes="crow")
+
+    async def _reload(self, folder: str) -> None:
+        """Scaffold + read the TSV off-thread, then render the rows."""
+        self._folder = folder
+
+        def load():
+            describe_mod.scaffold_folder(folder)
+            data = describe_mod._read_tsv(os.path.join(folder, describe_mod.TSV))
+            clips = {describe_mod._session(c) or "": c
+                     for c in describe_mod._clips(os.path.join(folder, "video"))}
+            return data, clips
+
+        data, clips = await asyncio.to_thread(load)
+        await self._populate(data, clips)
+
+    async def _populate(self, data: dict, clips: dict) -> None:
+        self._rowsdata, self._clip = data, clips
+        cont = self.query_one("#rows", VerticalScroll)
+        await cont.remove_children()
+        rows = [self._make_row(s, data[s].get("duration", ""),
+                               data[s].get("date", ""), data[s].get("description", ""))
+                for s in sorted(data)]
+        await cont.mount(*(rows or [Static("No clips in this folder.")]))
+        self._status(f"{len(data)} clip(s) — {Path(self._folder).name}")
+
+    def _collect(self) -> None:
+        rows = []
+        for sess in sorted(self._rowsdata):
+            old = self._rowsdata[sess]
+            try:
+                date = self.query_one(f"#date_{sess}", Input).value.strip()
+                desc = self.query_one(f"#desc_{sess}", Input).value.strip()
+            except Exception:                       # noqa: BLE001
+                date, desc = old.get("date", ""), old.get("description", "")
+            rows.append({"session": sess, "date": date,
+                         "duration": old.get("duration", ""), "description": desc})
+        describe_mod._write_tsv(os.path.join(self._folder, describe_mod.TSV), rows)
+
+    def _open(self, path: str) -> None:
+        if tools.has("xdg-open") and os.path.exists(path):
+            subprocess.Popen(["xdg-open", path],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @work(thread=True)
+    def _apply_worker(self) -> None:
+        self.app.call_from_thread(self._status, "Applying — embedding metadata + "
+                                  "renaming (no re-encode)…", "warn")
+        try:
+            n = len(describe_mod.apply_folder(self._folder, str(Path(self._folder).parent)))
+        except Exception as ex:                     # noqa: BLE001
+            self.app.call_from_thread(self._status, f"Apply failed: {ex}", "fail")
+            return
+        self.app.call_from_thread(self._status, f"Applied — {n} clip(s) renamed + "
+                                  "tagged. Montage refreshed.", "ok")
+        self.app.call_from_thread(self._kick, self._folder)
+
+    def on_select_changed(self, e: Select.Changed) -> None:
+        if e.value and e.value != Select.BLANK:
+            self._kick(str(e.value))
+
+    def on_button_pressed(self, e: Button.Pressed) -> None:
+        bid = e.button.id or ""
+        if bid == "close_desc":
+            self.dismiss()
+        elif bid == "save_desc":
+            self._collect()
+            self._status("Saved descriptions.tsv.", "ok")
+        elif bid == "apply_desc":
+            self._collect()
+            self._apply_worker()
+        elif bid == "open_dir":
+            self._open(self._folder)
+        elif bid.startswith("open_"):
+            self._open(self._clip.get(bid[5:], ""))
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 _LOGCOLOR = {"warn": "dark_orange", "fail": "red", "ok": "green",
              "dim": "grey50", "info": "white"}
 # Highlight key=value tokens (media=DVD-ROM, finalized=yes, eject=True…) so the
@@ -159,6 +321,7 @@ class MiniDvdApp(App):
         ("s", "settings", "Settings"),
         ("x", "cancel", "Cancel rip"),
         ("c", "check", "Check tools"),
+        ("n", "describe", "Describe"),
         ("y", "copy_log", "Copy log"),
         ("q", "quit", "Quit"),
     ]
@@ -179,6 +342,7 @@ class MiniDvdApp(App):
             yield Button("Browse", id="browse", variant="primary")
             yield Input(value=self.cfg.device, id="device")
             yield Button("Settings", id="settings")
+            yield Button("Describe", id="describe_btn")
             yield Button("RIP", id="rip", variant="success")
             yield Button("Cancel", id="cancel_rip", variant="error", disabled=True)
         with Horizontal(id="body"):
@@ -408,6 +572,8 @@ class MiniDvdApp(App):
             self.action_settings()
         elif event.button.id == "cancel_rip":
             self.action_cancel()
+        elif event.button.id == "describe_btn":
+            self.action_describe()
 
     def action_cancel(self) -> None:
         if not self._busy or self._active_pipeline is None:
@@ -426,6 +592,18 @@ class MiniDvdApp(App):
             self._log(f"Settings saved (eject={self.cfg.eject_when_done}, "
                       f"contact={self.cfg.contact_sheets}, verify={self.cfg.verify_decode}).", "ok")
         self.push_screen(SettingsModal(self.cfg), saved)
+
+    def action_describe(self) -> None:
+        if self._busy:
+            self._log("Wait for the rip to finish before describing.", "warn")
+            return
+        parent = self.query_one("#parent", Input).value.strip()
+        if parent and Path(parent).is_dir():
+            self.cfg.parent_dir = str(Path(parent).resolve())
+        if not self.cfg.parent_dir or not Path(self.cfg.parent_dir).is_dir():
+            self._log("Set a valid parent output folder first.", "warn")
+            return
+        self.push_screen(DescribeScreen(self.cfg))
 
     @work(thread=True)
     def _browse(self) -> None:

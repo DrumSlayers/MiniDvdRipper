@@ -5,7 +5,7 @@
 [![CI](https://github.com/drumslayer/MiniDvdRipper/actions/workflows/ci.yml/badge.svg)](https://github.com/drumslayer/MiniDvdRipper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Linux](https://img.shields.io/badge/platform-Linux-333.svg?logo=linux&logoColor=white)](#requirements)
-[![Lossless](https://img.shields.io/badge/remux-lossless-success.svg)](#lossless-remux-no-re-encoding)
+[![Lossless](https://img.shields.io/badge/remux-lossless-success.svg)](#6-lossless-remux--no-re-encoding)
 [![Code style: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 
 A terminal tool for archiving the **8 cm DVDs that Sony Handycam camcorders burned** (the DCR-DVD / "MiniDVD" line, roughly 2003–2011). It rips each disc into one lossless MKV per recording, copies the still photos, keeps the original dates so your photo library sorts them correctly, and — the part I actually built this for — **recovers discs that were never finalized**, without the camcorder and without writing anything to the disc.
@@ -20,6 +20,7 @@ It was written to clear a shoebox of family discs whose camcorder died years ago
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Output layout](#output-layout)
+- [Describing clips](#describing-clips) — names + metadata for sharing
 - [The Sony Handycam MiniDVD format](#the-sony-handycam-minidvd-format) — the format, in detail
 - [How a rip works, step by step](#how-a-rip-works-step-by-step)
 - [Recovering unfinalized discs](#recovering-unfinalized-discs) — the interesting part
@@ -76,7 +77,7 @@ mdvdrip
 
 **Rip a disc (TUI):** launch `mdvdrip`, point it at a parent output folder (type a path or hit **Browse**, which opens a `zenity` folder picker), pop a disc in, press **RIP**. When it's done it ejects; insert the next one and press RIP again.
 
-Keys: `r` rip · `x` cancel · `e` eject · `d` detect drive · `f` finalize · `s` settings · `c` re-check tools · `q` quit.
+Keys: `r` rip · `x` cancel · `e` eject · `d` detect drive · `f` finalize · `s` settings · `n` describe · `c` re-check tools · `y` copy log · `q` quit.
 
 **Sort a whole box first, without ripping anything:**
 
@@ -126,6 +127,31 @@ One folder per disc, named after the disc's volume label normalised to 24-hour (
 ```
 
 The MKV filenames lead with the session number and the recording timestamp, so they sort chronologically on their own.
+
+---
+
+## Describing clips
+
+A camcorder clip is named by date, not by *what it is*. To label them ("Mamie's 70th", "the football match") in a way that survives everything — re-encoding, uploading to Google Photos or gofile, handing the folder to family — you describe each clip once and apply it.
+
+**In the TUI** (easiest): press **`n`** (or the **Describe** button), pick a folder, type a description next to each clip — press **▶** to watch one while you label it — fix the date if needed, then **Apply**. That embeds the metadata and renames the clips on the spot.
+
+**Or from the CLI** (good for batching a whole box), via a per-folder `descriptions.tsv` you edit in any spreadsheet:
+
+Why both filename and metadata: **Google Photos and gofile ignore embedded video description tags** — they show the *filename* and sort on the *date*. Plex/VLC/Jellyfin do read the metadata. So the description goes in **both**: the filename (seen everywhere) and the container tags (`title`/`description`/`creation_time`, for media servers).
+
+```bash
+# 1. scaffold a descriptions.tsv into each disc folder (clip, date, duration, blank description)
+mdvdrip --describe-init --parent ~/Videos/MiniDVD       # or --folder <one disc folder>
+
+# 2. open each descriptions.tsv (any spreadsheet/editor), fill the description column,
+#    and fix the date where it's wrong (e.g. undated _recovered discs)
+
+# 3. apply — embeds metadata, renames clips, refreshes the contact sheets + montage
+mdvdrip --describe-apply --parent ~/Videos/MiniDVD
+```
+
+A row looks like `01⇥2005-08-21⇥11m09s⇥Anniversaire Mamie 70 ans` and yields `01__2005-08-21__Anniversaire-Mamie-70-ans__11m09s.mkv` with `title`/`description`/`date`/`creation_time` set and the file mtime aligned to the event. Duration is filled automatically — don't type it. **`--describe-apply` is re-runnable**: run it again after a re-encode (it keys on the session number, so the metadata and names are re-stamped onto the new files). Editing is non-destructive — re-running `--describe-init` keeps the descriptions and dates you already typed.
 
 ---
 
